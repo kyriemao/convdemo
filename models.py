@@ -1,5 +1,5 @@
 class Rewriter:
-    def __init__(self):
+    def __init__(self, model_path):
         pass
 
 class Retriever:
