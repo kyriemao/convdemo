@@ -1,5 +1,6 @@
 class Rewriter:
-    pass
+    def __init__(self):
+        pass
 
 class Retriever:
     pass
