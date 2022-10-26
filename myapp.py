@@ -35,7 +35,10 @@ def get_args():
 	parser.add_argument("--reranker_path", type=str, default="")
 	parser.add_argument("--index_path", type=str, default="")
 	parser.add_argument("--mode", type=str, required=True, choices=["cqr", "cdr"])
-
+	
+	parser.add_argument("--n_gpu_for_faiss", type=int, default=1)
+	parser.add_argument("--index_block_num", type=int, default=-1)
+	
 	args = parser.parse_args()
 	device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 	args.device = device
