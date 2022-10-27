@@ -1,4 +1,5 @@
 
+from multiprocessing.sharedctypes import Value
 import os
 from flask import Flask, render_template, request, redirect, url_for, flash
 from flask_sqlalchemy import SQLAlchemy
@@ -40,16 +41,19 @@ def get_args():
 	parser.add_argument("--retriever_path", type=str, default="")
 	parser.add_argument("--reranker_path", type=str, default="")
 	parser.add_argument("--index_path", type=str, default="")
+	parser.add_argument("--collection_path", type=str, default="")
 	parser.add_argument("--mode", type=str, required=True, choices=["cqr", "cdr"])
-	
+	parser.add_argument("--retriever_type", type=str, default="sparse", required=True, choices=["dense", "sparse"])
 	parser.add_argument("--n_gpu_for_faiss", type=int, default=1)
 	parser.add_argument("--index_block_num", type=int, default=-1)
+	parser.add_argument("--num_split_block", type=int, default=1)
 	parser.add_argument("--max_query_length", type=int, default=32)
 	parser.add_argument("--max_response_length", type=int, default=64)
 	parser.add_argument("--max_seq_length", type=int, default=256)
 	
-	
 	args = parser.parse_args()
+	if args.retriever_type == "dense" and args.collection_path == "":
+		raise ValueError
 	device = torch.device("cpu" if torch.cuda.is_available() else "cpu")
 	args.device = device
 	return args
@@ -58,4 +62,4 @@ def get_args():
 if __name__ == "__main__":
 	args = get_args()
 	search_bot = SearchBot(args)
-	app.run()
+	app.run(debug=False)

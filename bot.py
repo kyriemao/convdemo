@@ -1,10 +1,13 @@
 from IPython import embed
-from models import Rewriter, SparseRetriever, Reranker
+from models import Rewriter, SparseRetriever,  DenseRetriever, Reranker
 
 class SearchBot:
     def __init__(self, args):
         self.rewriter = Rewriter(args)
-        self.retriever = SparseRetriever(args)
+        if args.retriever_type == "sparse":
+            self.retriever = SparseRetriever(args)
+        else:
+            self.retriever = DenseRetriever(args)
         self.reranker = Reranker(args)
         # mode can be "cqr" or "cdr"
         self.mode = args.mode

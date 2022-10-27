@@ -5,12 +5,14 @@ import torch.nn as nn
 import os
 from os.path import join as oj
 
+
+import time
 import json
 import copy
 import faiss
 import pickle
 import numpy as np
-from time import time
+from tqdm import tqdm
 
 from abc import abstractmethod
 from pyserini.search.lucene import LuceneSearcher
@@ -51,6 +53,10 @@ class Retriever:
         self.index_path = args.index_path
         self.device = args.device
         self.top_k = 20
+
+        self.max_query_length = args.max_query_length
+        self.max_response_length = args.max_response_length
+        self.max_seq_length = args.max_seq_length
     
     @abstractmethod
     def __call__(self, query, context=None):
@@ -117,32 +123,52 @@ class ANCE(RobertaForSequenceClassification):
 
 class DenseRetriever(Retriever):
     def __init__(self, args):
-        super.__init__(self, args)
+        super().__init__(args)
         self.n_gpu_for_faiss = args.n_gpu_for_faiss
         self.faiss_index = self.build_faiss_index()
         self.index_block_num = args.index_block_num
-
-        self.model, self.tokenizer = self.load_model()
+        self.num_split_block = args.num_split_block
+        self.model, self.tokenizer = self.load_model(args.retriever_path)
         self.model.to(self.device)
+        
+        self.collection = self.load_collection(args.collection_path)
 
+
+    def load_collection(self, collection_path):
+        collection = {}
+        with open(collection_path, "r") as f:
+            for line in tqdm(f):
+                try:
+                    pid, passage = line.strip().split('\t')
+                    pid = int(pid)
+                except:
+                    continue
+                collection[pid] = passage
+        return collection
 
 
     def __call__(self, query, context=None):
         query_emb = self.cal_query_emb(query, context)
+        query_emb = query_emb.detach().cpu().numpy()
         retrieved_scores_mat, retrieved_pid_mat = self.search_one_by_one_with_faiss(query_emb)
-        return retrieved_pid_mat
+        retrieved_pid_mat = retrieved_pid_mat[0]
+        results = []
+        for pid in retrieved_pid_mat:
+            pid = int(pid)
+            results.append({"doc_id": pid, "contents": self.collection[pid]})
+        return results
 
 
-    def load_model(self):
+    def load_model(self, model_path):
         config = RobertaConfig.from_pretrained(
-            self.model_path,
+            model_path,
             finetuning_task="MSMarco",
         )
         tokenizer = RobertaTokenizer.from_pretrained(
-            self.model_path,
+            model_path,
             do_lower_case=True
         )
-        model = ANCE.from_pretrained(self.model_path, config=config)
+        model = ANCE.from_pretrained(model_path, config=config)
         return model, tokenizer
 
     def cal_query_emb(self, query, context):
@@ -158,8 +184,9 @@ class DenseRetriever(Retriever):
                                             add_special_tokens=True, 
                                             max_length=self.max_query_length, 
                                             truncation=True)
-        input_ids = input_ids.to(self.device)       
-        query_emb = self.model(input_ids)
+        input_ids = torch.tensor(input_ids).to(self.device).view(1, -1)
+        attention_mask = torch.ones(input_ids.size()).to(self.device).long()
+        query_emb = self.model(input_ids, attention_mask)
         return query_emb
 
     def build_faiss_index(self):
@@ -174,7 +201,10 @@ class DenseRetriever(Retriever):
                 res.setTempMemory(tempmem)
             gpu_resources.append(res)
 
-        cpu_index = faiss.IndexFlatIP(768)          
+        cpu_index = faiss.IndexFlatIP(768)    
+        if self.device.type == "cpu":
+            return cpu_index
+
         co = faiss.GpuMultipleClonerOptions()
         co.shard = True
         co.usePrecomputed = False
@@ -214,21 +244,22 @@ class DenseRetriever(Retriever):
             except:
                 raise LoadError    
             
-            print.info('passage embedding shape: ' + str(passage_embedding.shape))
+            # print('passage embedding shape: ' + str(passage_embedding.shape))
 
-            passage_embeddings = np.array_split(passage_embedding, args.num_split_block)
-            passage_embedding2ids = np.array_split(passage_embedding2id, args.num_split_block)
+            passage_embeddings = np.array_split(passage_embedding, self.num_split_block)
+            passage_embedding2ids = np.array_split(passage_embedding2id, self.num_split_block)
             for split_idx in range(len(passage_embeddings)):
                 passage_embedding = passage_embeddings[split_idx]
                 passage_embedding2id = passage_embedding2ids[split_idx]
                 
-                print.info("Adding block {} split {} into index...".format(block_id, split_idx))
+                print("Adding block {} split {} into index...".format(block_id, split_idx))
                 self.faiss_index.add(passage_embedding)
                 
                 # ann search
                 tb = time.time()
                 D, I = self.faiss_index.search(query_emb, self.top_k)
                 elapse = time.time() - tb
+                print("time cost: {}".format(elapse))
 
                 candidate_id_matrix = passage_embedding2id[I] # passage_idx -> passage_id
                 D = D.tolist()
