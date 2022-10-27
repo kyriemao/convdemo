@@ -5,6 +5,7 @@ import torch.nn as nn
 import os
 from os.path import join as oj
 
+import json
 import copy
 import faiss
 import pickle
@@ -14,54 +15,63 @@ from time import time
 from abc import abstractmethod
 from pyserini.search.lucene import LuceneSearcher
 from transformers import T5Tokenizer, T5ForConditionalGeneration
-from transformers import (RobertaConfig,
+from transformers import (RobertaConfig, AutoModelForSequenceClassification, AutoTokenizer,
                           RobertaForSequenceClassification, RobertaTokenizer)
-
+from IPython import embed
 
 class Rewriter:
-    def __init__(self, model_path, device):
-        self.tokenizer = T5Tokenizer.from_pretrained(model_path)
-        self.t5 = T5ForConditionalGeneration.from_pretrained(model_path)
-        self.t5.to(device)
+    def __init__(self, args):
+        self.tokenizer = T5Tokenizer.from_pretrained(args.rewriter_path)
+        self.t5 = T5ForConditionalGeneration.from_pretrained(args.rewriter_path)
+        self.device = args.device
+        self.t5.to(self.device)
         self.max_response_length = 64
         self.max_query_length = 32
         self.max_seq_length = 256
 
-    def rewrite(self, query, context):
+    def __call__(self, query, context):
         input_ids = get_conv_bert_input(query, context, 
                                         self.tokenizer, 
                                         self.max_query_length, 
                                         self.max_response_length, 
                                         self.max_seq_length)
-        input_ids = input_ids.to(self.device)
-        outputs = self.t5.generate(input_ids)
+        input_ids = torch.tensor(input_ids).to(self.device).view(1, -1)
+        attention_mask = torch.ones(input_ids.size()).to(self.device).long()
+        outputs = self.t5.generate(input_ids=input_ids, 
+                                   attention_mask=attention_mask, 
+                                   do_sample=False,
+                                   max_length=self.max_query_length)
         rewrite_text = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
         return rewrite_text
 
 
 class Retriever:
     def __init__(self, args):
-        self.model_path = args.model_path
+        self.retriever_path = args.retriever_path
         self.index_path = args.index_path
         self.device = args.device
-        self.top_k = 50
+        self.top_k = 20
     
     @abstractmethod
-    def search(self, query, context=None):
+    def __call__(self, query, context=None):
         raise NotImplementedError
 
 
 class SparseRetriever(Retriever):
     def __init__(self, args):
-        super.__init__(self, args)
+        super().__init__(args)
         self.searcher = LuceneSearcher(self.index_path)
         self.bm25_k1 = 0.82 
         self.bm25_b = 0.68
         self.searcher.set_bm25(self.bm25_k1, self.bm25_b)
  
-    def search(self, query):
+    def __call__(self, query):
         hits = self.searcher.search(query, k = self.top_k)
-        return hits
+        results = []
+        for hit in hits:
+            hit = json.loads(hit.raw)
+            results.append(hit)
+        return results
 
 # ANCE dense retrieval model
 class ANCE(RobertaForSequenceClassification):
@@ -117,7 +127,7 @@ class DenseRetriever(Retriever):
 
 
 
-    def search(self, query, context=None):
+    def __call__(self, query, context=None):
         query_emb = self.cal_query_emb(query, context)
         retrieved_scores_mat, retrieved_pid_mat = self.search_one_by_one_with_faiss(query_emb)
         return retrieved_pid_mat
@@ -275,8 +285,32 @@ class DenseRetriever(Retriever):
 
 
 class Reranker:
-    pass
+    def __init__(self, args):
+        self.max_seq_length = args.max_seq_length
+        self.device = args.device
+        self.tokenizer = AutoTokenizer.from_pretrained(args.reranker_path)
+        self.model = AutoModelForSequenceClassification.from_pretrained(args.reranker_path)
 
+    def __call__(self, query, context, candidates):
+        inputs_pairs = []
+        for candidate in candidates:
+            inputs_pairs.append([query, candidate['contents']])
+
+        if context is None:
+            encoded_inputs = self.tokenizer.batch_encode_plus(inputs_pairs,
+                                                            add_special_tokens=True,
+                                                            padding='max_length',
+                                                            max_length=self.max_seq_length,
+                                                            truncation=True,
+                                                            return_tensors='pt')
+            
+            with torch.no_grad():
+                output = self.model(**encoded_inputs).logits
+            max_idx = torch.argmax(output).item()
+            return candidates[max_idx]['contents']
+        else:
+            raise NotImplementedError
+        
 
 def get_conv_bert_input(query, context, tokenizer, max_query_length, max_response_length, max_seq_length):
     input_ids = []
@@ -285,12 +319,13 @@ def get_conv_bert_input(query, context, tokenizer, max_query_length, max_respons
                                     max_length=max_query_length, 
                                     truncation=True)
     input_ids.extend(encoded_query)
-    last_response = context[-1]
-    encoded_response = tokenizer.encode(last_response, 
-                                        add_special_tokens=True, 
-                                        max_length=max_response_length, 
-                                        truncation=True)[1:] # remove [CLS]
-    input_ids.extend(encoded_response)
+    if len(context) > 1:
+        last_response = context[-1]
+        encoded_response = tokenizer.encode(last_response, 
+                                            add_special_tokens=True, 
+                                            max_length=max_response_length, 
+                                            truncation=True)[1:] # remove [CLS]
+        input_ids.extend(encoded_response)
     
     for i in range(len(context) - 2, -1, -2):
         encoded_history = tokenizer.encode(context[i],
