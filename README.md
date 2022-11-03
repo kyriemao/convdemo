@@ -1,5 +1,6 @@
 # A Conversaitonal Search Demo
 
+![image]( https://github.com/kyriemao/convdemo/blob/master/demo.png)
 
 ## Environment
 ```
@@ -39,4 +40,4 @@ bash run_sparse.sh  # cqr-sparse.
 bash run_dense.sh # cqr-dense. It takes around 10 minues to load all of data (~38M passages). The size of embeddings is 110G. The index.add(embeddings) in faiss takes the majority of time cost.
 ```
 
-BTW, in this demo, we always perform first perform query rewriting because we need the rewrite to perform query clarification.
+BTW, in this demo, we alway first perform query rewriting because we need the rewrite to perform query clarification.
