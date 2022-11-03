@@ -20,6 +20,9 @@ from transformers import T5Tokenizer, T5ForConditionalGeneration
 from transformers import (RobertaConfig, AutoModelForSequenceClassification, AutoTokenizer,
                           RobertaForSequenceClassification, RobertaTokenizer)
 from IPython import embed
+from utils import pload, pstore
+
+
 
 class Rewriter:
     def __init__(self, args):
@@ -29,20 +32,24 @@ class Rewriter:
         self.t5.to(self.device)
         self.max_response_length = 64
         self.max_query_length = 32
-        self.max_seq_length = 256
+        self.max_seq_length = 128
 
     def __call__(self, query, context):
-        input_ids = get_conv_bert_input(query, context, 
-                                        self.tokenizer, 
-                                        self.max_query_length, 
-                                        self.max_response_length, 
-                                        self.max_seq_length)
+        input_ids = get_conv_bert_input_no_response(query, 
+                                                    context, 
+                                                    self.tokenizer, 
+                                                    self.max_query_length, 
+                                                    self.max_response_length, 
+                                                    self.max_seq_length)
         input_ids = torch.tensor(input_ids).to(self.device).view(1, -1)
         attention_mask = torch.ones(input_ids.size()).to(self.device).long()
+        begin_time = time.time()
         outputs = self.t5.generate(input_ids=input_ids, 
                                    attention_mask=attention_mask, 
                                    do_sample=False,
                                    max_length=self.max_query_length)
+        end_time = time.time()
+        print("rewriting time cost: {}".format(end_time - begin_time))
         rewrite_text = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
         return rewrite_text
 
@@ -76,6 +83,7 @@ class SparseRetriever(Retriever):
         results = []
         for hit in hits:
             hit = json.loads(hit.raw)
+            hit['url'] = "https://url_sparse"
             results.append(hit)
         return results
 
@@ -124,19 +132,41 @@ class ANCE(RobertaForSequenceClassification):
 class DenseRetriever(Retriever):
     def __init__(self, args):
         super().__init__(args)
-        self.n_gpu_for_faiss = args.n_gpu_for_faiss
+        self.doc_embeddings_path = args.doc_embeddings_path
+        self.docfaissidx_to_realdocid_path = args.docfaissidx_to_realdocid_path
+        self.collection_path = args.collection_path
+        
+        start_time = time.time()
         self.faiss_index = self.build_faiss_index()
-        self.index_block_num = args.index_block_num
-        self.num_split_block = args.num_split_block
         self.model, self.tokenizer = self.load_model(args.retriever_path)
         self.model.to(self.device)
         
-        self.collection = self.load_collection(args.collection_path)
+        self.docid_map, self.collection = self.load_corpus()
+        print("Dense Retriever setup time: {}s".format(time.time() - start_time))
+        # self.collection = None
 
 
-    def load_collection(self, collection_path):
+
+
+    def __call__(self, query, context=None):
+        # cal query embedding
+        query_emb = self.cal_query_emb(query, context)
+        query_emb = query_emb.detach().cpu().numpy()
+        
+        # dense retrieval
+        retrieved_pids = self.search_with_faiss(query_emb)
+        retrieved_pids = retrieved_pids[0]
+        
+        # organize results
+        results = []
+        for pid in retrieved_pids:
+            pid = int(pid)
+            results.append({"doc_id": pid, "contents": self.collection[pid], "url":"https://url_dense"})
+        return results
+
+    def load_corpus(self):
         collection = {}
-        with open(collection_path, "r") as f:
+        with open(self.collection_path, "r") as f:
             for line in tqdm(f):
                 try:
                     pid, passage = line.strip().split('\t')
@@ -144,20 +174,9 @@ class DenseRetriever(Retriever):
                 except:
                     continue
                 collection[pid] = passage
-        return collection
+        docid_map = pload(self.docfaissidx_to_realdocid_path)
 
-
-    def __call__(self, query, context=None):
-        query_emb = self.cal_query_emb(query, context)
-        query_emb = query_emb.detach().cpu().numpy()
-        retrieved_scores_mat, retrieved_pid_mat = self.search_one_by_one_with_faiss(query_emb)
-        retrieved_pid_mat = retrieved_pid_mat[0]
-        results = []
-        for pid in retrieved_pid_mat:
-            pid = int(pid)
-            results.append({"doc_id": pid, "contents": self.collection[pid]})
-        return results
-
+        return docid_map, collection
 
     def load_model(self, model_path):
         config = RobertaConfig.from_pretrained(
@@ -173,12 +192,12 @@ class DenseRetriever(Retriever):
 
     def cal_query_emb(self, query, context):
         if context is not None:
-            input_ids = get_conv_bert_input(query, 
-                                            context, 
-                                            self.tokenizer, 
-                                            self.max_query_length, 
-                                            self.max_response_length, 
-                                            self.max_seq_length)
+            input_ids = get_conv_bert_input_no_response(query, 
+                                                        context, 
+                                                        self.tokenizer, 
+                                                        self.max_query_length, 
+                                                        self.max_response_length, 
+                                                        self.max_seq_length)
         else:
             input_ids = self.tokenizer.encode(query,
                                             add_special_tokens=True, 
@@ -190,129 +209,29 @@ class DenseRetriever(Retriever):
         return query_emb
 
     def build_faiss_index(self):
-        print("build faiss index...")
-        ngpu = self.n_gpu_for_faiss
-        gpu_resources = []
-        tempmem = -1
+        index = faiss.read_index(self.index_path)
+        print("faiss index is trained: {}".format(index.is_trained))
 
-        for i in range(ngpu):
-            res = faiss.StandardGpuResources()
-            if tempmem >= 0:
-                res.setTempMemory(tempmem)
-            gpu_resources.append(res)
-
-        cpu_index = faiss.IndexFlatIP(768)    
-        if self.device.type == "cpu":
-            return cpu_index
-
-        co = faiss.GpuMultipleClonerOptions()
-        co.shard = True
-        co.usePrecomputed = False
-        # gpu_vector_resources, gpu_devices_vector
-        vres = faiss.GpuResourcesVector()
-        vdev = faiss.Int32Vector()
-        for i in range(0, ngpu):
-            vdev.push_back(i)
-            vres.push_back(gpu_resources[i])
-        gpu_index = faiss.index_cpu_to_gpu_multiple(vres,
-                                                    vdev,
-                                                    cpu_index, co)
-        return gpu_index
-
-    def search_one_by_one_with_faiss(self, query_emb):
-        merged_candidate_matrix = None
-        if self.index_block_num < 0:
-            # automaticall get the number of passage blocks
-            for filename in os.listdir(self.index_path):
-                try:
-                    self.index_block_num = max(self.index_block_num, int(filename.split(".")[1]) + 1)
-                except:
-                    continue
-            print("Automatically detect that the number of doc blocks is: {}".format(self.index_block_num))
+        print("load doc embeddings...")
+        start_time = time.time()
+        doc_embeddings = pload(self.doc_embeddings_path)
+        print("spend {} seconds to load embeddings.".format(time.time() - start_time))
         
-        for block_id in range(self.index_block_num):
-            print("Loading passage block " + str(block_id))
-            passage_embedding = None
-            passage_embedding2id = None
-            try:
-                with open(oj(self.index_path, "doc_emb_block.{}.pb".format(block_id)), 'rb') as handle:
-                    passage_embedding = pickle.load(handle)
-                with open(oj(self.index_path, "doc_embid_block.{}.pb".format(block_id)), 'rb') as handle:
-                    passage_embedding2id = pickle.load(handle)
-                    if isinstance(passage_embedding2id, list):
-                        passage_embedding2id = np.array(passage_embedding2id)
-            except:
-                raise LoadError    
-            
-            # print('passage embedding shape: ' + str(passage_embedding.shape))
+        print("add doc embeddings into faiss index...")
+        index.add(doc_embeddings)
+        print("index add embedding ok!")
 
-            passage_embeddings = np.array_split(passage_embedding, self.num_split_block)
-            passage_embedding2ids = np.array_split(passage_embedding2id, self.num_split_block)
-            for split_idx in range(len(passage_embeddings)):
-                passage_embedding = passage_embeddings[split_idx]
-                passage_embedding2id = passage_embedding2ids[split_idx]
-                
-                print("Adding block {} split {} into index...".format(block_id, split_idx))
-                self.faiss_index.add(passage_embedding)
-                
-                # ann search
-                tb = time.time()
-                D, I = self.faiss_index.search(query_emb, self.top_k)
-                elapse = time.time() - tb
-                print("time cost: {}".format(elapse))
+        return index
 
-                candidate_id_matrix = passage_embedding2id[I] # passage_idx -> passage_id
-                D = D.tolist()
-                candidate_id_matrix = candidate_id_matrix.tolist()
-                candidate_matrix = []
+    def search_with_faiss(self, query_emb):
+        tb = time.time()
+        D, I = self.faiss_index.search(query_emb, self.top_k)
+        elapse = time.time() - tb
+        print("dense retrieval time cost: {}".format(elapse))
 
-                for score_list, passage_list in zip(D, candidate_id_matrix):
-                    candidate_matrix.append([])
-                    for score, passage in zip(score_list, passage_list):
-                        candidate_matrix[-1].append((score, passage))
-                    assert len(candidate_matrix[-1]) == len(passage_list)
-                assert len(candidate_matrix) == I.shape[0]
+        doc_idxs = self.docid_map[I] # faiss_doc_idx -> real_doc_id_in_collection
+        return doc_idxs
 
-                self.faiss_index.reset()
-                del passage_embedding
-                del passage_embedding2id
-
-                if merged_candidate_matrix == None:
-                    merged_candidate_matrix = candidate_matrix
-                    continue
-                
-                # merge
-                merged_candidate_matrix_tmp = copy.deepcopy(merged_candidate_matrix)
-                merged_candidate_matrix = []
-                for merged_list, cur_list in zip(merged_candidate_matrix_tmp,
-                                                candidate_matrix):
-                    p1, p2 = 0, 0
-                    merged_candidate_matrix.append([])
-                    while p1 < self.top_k and p2 < self.top_k:
-                        if merged_list[p1][0] >= cur_list[p2][0]:
-                            merged_candidate_matrix[-1].append(merged_list[p1])
-                            p1 += 1
-                        else:
-                            merged_candidate_matrix[-1].append(cur_list[p2])
-                            p2 += 1
-                    while p1 < self.top_k:
-                        merged_candidate_matrix[-1].append(merged_list[p1])
-                        p1 += 1
-                    while p2 < self.top_k:
-                        merged_candidate_matrix[-1].append(cur_list[p2])
-                        p2 += 1
-
-        merged_D, merged_I = [], []
-
-        for merged_list in merged_candidate_matrix:
-            merged_D.append([])
-            merged_I.append([])
-            for candidate in merged_list:
-                merged_D[-1].append(candidate[0])
-                merged_I[-1].append(candidate[1])
-        merged_D, merged_I = np.array(merged_D), np.array(merged_I)
-
-        return merged_D, merged_I
 
 
 class Reranker:
@@ -337,13 +256,23 @@ class Reranker:
             
             with torch.no_grad():
                 output = self.model(**encoded_inputs).logits
-            max_idx = torch.argmax(output).item()
-            return candidates[max_idx]['contents']
+            output = output.squeeze(-1)
+            topk_values = torch.topk(output, 3).values
+            topk_idxs = torch.topk(output, 3).indices
+
+            res = []    # (content, score, url)
+            for i in range(len(topk_idxs)):
+                content = candidates[topk_idxs[i]]['contents']
+                score = round(topk_values[i].item(), 3)
+                url = candidates[topk_idxs[i]]['url']
+                first_sent = content.split('.')[0]
+                res.append((content, score, url, first_sent))
+            return res
         else:
             raise NotImplementedError
         
 
-def get_conv_bert_input(query, context, tokenizer, max_query_length, max_response_length, max_seq_length):
+def get_conv_bert_input_no_response(query, context, tokenizer, max_query_length, max_response_length, max_seq_length):
     input_ids = []
     encoded_query = tokenizer.encode(query,
                                     add_special_tokens=True, 
@@ -366,5 +295,24 @@ def get_conv_bert_input(query, context, tokenizer, max_query_length, max_respons
         input_ids.extend(encoded_history)
         if len(input_ids) > max_seq_length:
             input_ids = input_ids[:max_seq_length - 1] + encoded_history[-1]    # ensure [SEP] ended
+    
+    return input_ids
+
+def get_conv_bert_input_no_response(query, context, tokenizer, max_query_length, max_response_length, max_seq_length):
+    input_ids = []
+    encoded_query = tokenizer.encode(query,
+                                    add_special_tokens=True, 
+                                    max_length=max_query_length, 
+                                    truncation=True)
+    input_ids.extend(encoded_query)
+    for i in range(len(context) - 1, -1, -1):
+        encoded_history = tokenizer.encode(context[i],
+                                            add_special_tokens=True, 
+                                            max_length=max_query_length, 
+                                            truncation=True)[1:] # remove [CLS]
+        input_ids.extend(encoded_history)
+        if len(input_ids) > max_seq_length:
+            input_ids = input_ids[:max_seq_length - 1] + encoded_history[-1]    # ensure [SEP] ended
+            break
     
     return input_ids

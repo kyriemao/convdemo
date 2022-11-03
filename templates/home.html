@@ -8,9 +8,9 @@
   <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.2.1/jquery.min.js"></script>
 
   <style>
-    body {
-      font-family: monospace;
-    }
+    /* body {
+       font-family: monospace; 
+    } */
 
     h1 {
       background-color: #FFC9BE;
@@ -32,6 +32,7 @@
       margin-right: auto;
       width: 40%;
       margin-top: 60px;
+      border: 1px solid green;
     }
 
     #userInput {
@@ -45,36 +46,87 @@
       width: 90%;
       border: none;
       border-bottom: 3px solid black;
-      font-family: monospace;
-      font-size: 17px;
+      /* font-family: monospace; */
+      font-size: 14px;
     }
 
     .userText {
       color: black;
-      font-family: monospace;
-      font-size: 17px;
+      /* font-family: monospace; */
+      font-size: 14px;
       text-align: right;
       line-height: 30px;
     }
 
     .userText span {
-      background-color: #FDFF60;
+      background-color: #FFF2CC;
       padding: 10px;
       border-radius: 2px;
     }
 
     .botText {
       color: black;
-      font-family: monospace;
-      font-size: 17px;
+      background-color: #DEEBF7;
+      /* font-family: monospace; */
+      font-size: 14px;
       text-align: left;
       line-height: 30px;
     }
 
+    .botText span.title {
+      color: rgb(32, 93, 207);
+      font-size: 17px;
+    }
+
     .botText span {
-      background-color: #BEE3FF;
+      background-color: #DEEBF7;
       padding: 10px;
       border-radius: 2px;
+    }
+
+    details {
+      background-color: #DEEBF7;
+      font-size: 14px;
+      /* padding: 10px;
+      border-radius: 2px; */
+    }
+
+    details>summary {
+      background-color: #DEEBF7;
+
+      /* padding: 10px;
+      border-radius: 2px; */
+    }
+
+    details.up {
+      font-size: 14px;
+      margin-top: -16px;
+      background-color: #DEEBF7;
+      /* padding: 10px;
+      border-radius: 2px; */
+    }
+
+    .botText_clarify {
+      color: black;
+      background-color: #E2F0D9;
+      /* font-family: monospace; */
+      font-size: 14px;
+      text-align: left;
+      line-height: 30px;
+    }
+
+    .botText_clarify span.title {
+      color: #57B8A1;
+      font-size: 17px;
+    }
+
+
+    .botText_clarify span {
+      color: black;
+      /* font-family: monospace; */
+      font-size: 14px;
+      text-align: left;
+      line-height: 30px;
     }
 
     #tidbit {
@@ -95,6 +147,22 @@
     .box {
       border: 2px solid black;
     }
+
+    .bot_image {
+      width: 40px;
+      height: 40px;
+      padding-left: 10px;
+    }
+
+    .user_image {
+      width: 40px;
+      height: 40px;
+      padding-left: 530px;
+    }
+
+    form {
+      margin: auto;
+    }
   </style>
 
 </head>
@@ -103,18 +171,19 @@
   <img />
   <center>
     <h1>
-      <img src="https://www.logolynx.com/images/logolynx/s_b9/b9075efd5754f8eb0b28894bbff5f1f0.jpeg" alt="CANDICE"
-        style="width:50px;height:50px;" />Conversational Search Demo
+      Conversational Search Demo
     </h1>
   </center>
   <div class="box"></div>
   <div class="boxed">
     <div>
       <div id="chatbox">
-        <img src="https://www.logolynx.com/images/logolynx/s_b9/b9075efd5754f8eb0b28894bbff5f1f0.jpeg" alt="CANDICE"
-          style="width:50px;height:50px;" />
+        <!-- <img src="https://www.logolynx.com/images/logolynx/s_b9/b9075efd5754f8eb0b28894bbff5f1f0.jpeg" alt="CANDICE"
+          style="width:50px;height:50px;" /> -->
+        <img class="bot_image" src="{{url_for('static',filename='images/robot.png',_t=val1)}}" width="40px"
+          height="40px">
         <p class="botText">
-          <span>Hello there! I am a conversational search bot. What do you want to search?</span>
+          <span class="content"> Hello there! I am a conversational search bot. What do you want to search?</span>
         </p>
       </div>
       <div id="userInput">
@@ -123,20 +192,108 @@
     </div>
     <script>
       function getBotResponse() {
+        var user_image_str = '<img class="user_image" src="{{url_for("static",filename="images/user.png",_t=val1)}}">'
         var rawText = $("#textInput").val();
-        var userHtml = '<p class="userText"><span>' + rawText + "</span></p>";
+        var userHtml = user_image_str + '<p class="userText"><span>' + rawText + "  </span></p>";
+
+
         $("#textInput").val("");
         $("#chatbox").append(userHtml);
         document.getElementById("userInput").scrollIntoView({ block: "start", behavior: "smooth" });
 
         $.get("/get", { msg: rawText }).done(function (data) {
-          var botHtml = '<p class="botText"><span>' + data + "</span></p>";
+          let res = JSON.parse(data);
+          let bot_image_str = '<img class="bot_image" src="{{url_for("static",filename="images/robot.png",_t=val1)}}">';
+          let bot_html_begin = '<p class="botText">';
+          let bot_html_end = '</p>';
+          let top1_search_result_content = res.top1_search_result[0];
+          let top1_search_result_score = res.top1_search_result[1];
+          let top1_search_result_url = res.top1_search_result[2]
+          let rewrite = res.rewrite;
+
+
+          let top2_search_result_content = res.other_search_results[0][0];
+          let top2_search_result_score = res.other_search_results[0][1];
+          let top2_search_result_url = res.other_search_results[0][2];
+          let top2_search_result_first_sent = res.other_search_results[0][3];
+
+          let top3_search_result_content = res.other_search_results[1][0];
+          let top3_search_result_score = res.other_search_results[1][1];
+          let top3_search_result_url = res.other_search_results[1][2];
+          let top3_search_result_first_sent = res.other_search_results[1][3];
+
+
+
+          let content = `<span class="title"><strong>Top-1 Search Result</strong></span>: \
+                         <span> \
+                         <br> \
+                         ${top1_search_result_content} \
+                          <a href="${top1_search_result_url}"><em>${top1_search_result_url}</em></a> \
+                         <br> \
+                         </span> \
+                         <span class="title"> \
+                         <strong>Ranking Score</strong>:
+                         </span> \
+                         <span>
+                         ${top1_search_result_score} \
+                         </span> \
+                         <br> \
+                         <span class="title"> \
+                         <strong>Query Rewrite</strong>: 
+                         </span> \
+                         <span> \
+                         ${rewrite} \
+                         </span> \
+                         <br> \
+                         <br> \
+                         <span class="title"> \
+                         <strong>Other Results</strong>: \
+                         </span>
+                         <br> \
+                         <details class="up"> \
+                         <summary><em>${top2_search_result_first_sent}</em></summary>
+                         <strong>Top-2 Search Result</strong>: \
+                         <br> \
+                         ${top2_search_result_content} \
+                          <a href="${top2_search_result_url}"><em>${top2_search_result_url}</em></a> \
+                         <br> \
+                         <strong>Ranking Score</strong>: ${top2_search_result_score} \
+                         </details>
+                         <details> \
+                         <summary><em>${top3_search_result_first_sent}</em></summary>
+                         <strong>Top-3 Search Result</strong>: \
+                         <br> \
+                         ${top3_search_result_content} \
+                          <a href="${top3_search_result_url}"><em>${top3_search_result_url}</em></a> \
+                         <br> \
+                         <strong>Ranking Score</strong>: ${top3_search_result_score} \
+                         <br> \
+                         </details>`;
+
+          let botHtml = bot_image_str + bot_html_begin + content + bot_html_end;
           $("#chatbox").append(botHtml);
+
+          let clarify_question = res.clarify_question;
+          if (clarify_question) {
+            clarify_item_candidates = res.clarify_item_candidates;
+            let clarify_content = `<p class="botText_clarify"> \
+                                  <span class="title"> \                  
+                                 <strong>Clarification & Recommendation</strong>: \
+                                 </span>
+                                 <br> \
+                                 ${clarify_question} \
+                                 <br> \
+                                 E.g., ${clarify_item_candidates} \
+                                 </span></p>`;
+            $("#chatbox").append(clarify_content);
+          }
+
+
           document
             .getElementById("userInput")
             .scrollIntoView({ block: "start", behavior: "smooth" });
         });
-        
+
       }
       $("#textInput").keypress(function (e) {
         if (e.which == 13) {
@@ -144,6 +301,9 @@
         }
       });
     </script>
+    <form method="post" action="/">
+      <input type="submit" value="Reset" name="action1" />
+    </form>
   </div>
 </body>
 

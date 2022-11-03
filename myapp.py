@@ -8,6 +8,7 @@ from flask_login import UserMixin
 from werkzeug.security import generate_password_hash, check_password_hash
 
 import torch
+import time
 import argparse
 from bot import SearchBot
 from IPython import embed
@@ -15,24 +16,39 @@ from IPython import embed
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'dev'
 
-@app.route("/")
-def home():
-	return render_template("home.html")
-
 
 context = []
+
+@app.route("/", methods=['GET', 'POST'])
+def home():
+	# if request.method == 'POST':
+	# 	if request.form.get('action1') == 'VALUE1':
+	# 		global context
+	# 		context = []
+	# 		print("context: ", context)
+	# 		return render_template("home.html", val1=time.time())
+	# else:
+	global context
+	context = []
+	print("context: ", context)
+	return render_template("home.html", val1=time.time())
+
+
 @app.route("/get")
 def get_bot_response():
+	global context
 	user_query = request.args.get('msg')
+	if user_query == "DELETE":
+		context = context[:-1]
+		return ""
 	if search_bot.mode == "cqr":
-		response, rewrite = search_bot.search(user_query, context)
-		showing_response = "Query Rewrite: {} @@@ {}".format(rewrite, response)
+		response_obj = search_bot.search(user_query, context)
 	else:
-		response = search_bot.search(user_query, context)
-		showing_response = response
+		response_obj = search_bot.search(user_query, context)
+		# showing_response = respone
 	context.append(user_query)
-	context.append(response)
-	return showing_response
+	print("current context: ", context)
+	return response_obj
 
 
 def get_args():
@@ -41,19 +57,20 @@ def get_args():
 	parser.add_argument("--retriever_path", type=str, default="")
 	parser.add_argument("--reranker_path", type=str, default="")
 	parser.add_argument("--index_path", type=str, default="")
-	parser.add_argument("--collection_path", type=str, default="")
+
+	parser.add_argument("--collection_path", type=str, default="", help="only for dense retrieval")
+	parser.add_argument("--doc_embeddings_path", type=str, default="", help="only for dense retrieval")
+	parser.add_argument("--docfaissidx_to_realdocid_path", type=str, default="", help="only for dense retrieval")
+	
 	parser.add_argument("--mode", type=str, required=True, choices=["cqr", "cdr"])
 	parser.add_argument("--retriever_type", type=str, default="sparse", required=True, choices=["dense", "sparse"])
-	parser.add_argument("--n_gpu_for_faiss", type=int, default=1)
-	parser.add_argument("--index_block_num", type=int, default=-1)
-	parser.add_argument("--num_split_block", type=int, default=1)
 	parser.add_argument("--max_query_length", type=int, default=32)
 	parser.add_argument("--max_response_length", type=int, default=64)
 	parser.add_argument("--max_seq_length", type=int, default=256)
 	
 	args = parser.parse_args()
-	if args.retriever_type == "dense" and args.collection_path == "":
-		raise ValueError
+	# if args.retriever_type == "dense" and args.collection_path == "":
+	# 	raise ValueError
 	device = torch.device("cpu" if torch.cuda.is_available() else "cpu")
 	args.device = device
 	return args
@@ -62,4 +79,4 @@ def get_args():
 if __name__ == "__main__":
 	args = get_args()
 	search_bot = SearchBot(args)
-	app.run(debug=False)
+	app.run(host='0.0.0.0',port=8082,debug=False)
