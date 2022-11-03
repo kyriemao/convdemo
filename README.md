@@ -1,6 +1,6 @@
 # A Conversaitonal Search Demo
 
-![image]( https://github.com/kyriemao/convdemo/blob/master/demo.png)
+![image](https://raw.githubusercontent.com/kyriemao/convdemo/v1/demo.png)
 
 ## Environment
 ```
