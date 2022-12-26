@@ -1,7 +1,7 @@
 export CUDA_VISIBLE_DEVICES=5
 
 python myapp.py --mode="cqr" \
---rewriter_path="/data1/kelong_mao/pretrained_models/t5qr_trained_on_qrecc" \
+--rewriter_path="/data1/kelong_mao/workspace/T5QR/outputs/t5qr_qrecc/checkpoints/epoch-5" \
 --index_path="/data1/kelong_mao/indexes/cast/ance/cast_faiss.index" \
 --retriever_path="/data1/kelong_mao/pretrained_models/ance-msmarco" \
 --retriever_type="dense" \

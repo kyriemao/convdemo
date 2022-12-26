@@ -52,7 +52,8 @@ class SearchBot:
                                         INFORMATIVE=True,
                                         INTENT_VERB=True)
             clarify_question = clarification_res[2]
-            clarify_item_candidates = str(clarification_res[3])
+            clarify_item_candidates = ", ".join(clarification_res[3])
+            # clarify_item_candidates = str(clarification_res[3])
         else:
             clarify_item_candidates, clarify_question = None, None
 

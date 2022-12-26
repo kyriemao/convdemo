@@ -21,8 +21,8 @@ from transformers import (RobertaConfig, AutoModelForSequenceClassification, Aut
                           RobertaForSequenceClassification, RobertaTokenizer)
 from IPython import embed
 from utils import pload, pstore
-
-
+from spacy.lang.en import English
+nlp = English()
 
 class Rewriter:
     def __init__(self, args):
@@ -30,19 +30,27 @@ class Rewriter:
         self.t5 = T5ForConditionalGeneration.from_pretrained(args.rewriter_path)
         self.device = args.device
         self.t5.to(self.device)
-        self.max_response_length = 64
+        # self.max_response_length = 64
         self.max_query_length = 32
         self.max_seq_length = 128
 
-    def __call__(self, query, context):
-        input_ids = get_conv_bert_input_no_response(query, 
-                                                    context, 
-                                                    self.tokenizer, 
-                                                    self.max_query_length, 
-                                                    self.max_response_length, 
-                                                    self.max_seq_length)
-        input_ids = torch.tensor(input_ids).to(self.device).view(1, -1)
-        attention_mask = torch.ones(input_ids.size()).to(self.device).long()
+    def __call__(self, cur_utt_text, ctx_utts_text):
+        # build input
+        ctx_utts_text.reverse()
+        src_seq = []
+        src_seq.append(cur_utt_text)
+        for i in range(len(ctx_utts_text)):
+            src_seq.append(ctx_utts_text[i])                
+        src_seq = " [SEP] ".join(src_seq)
+
+        bt_src_encoding = self.tokenizer(src_seq, 
+                                        padding="longest", 
+                                        max_length=self.max_seq_length, 
+                                        truncation=True, 
+                                        return_tensors="pt")
+        input_ids, attention_mask = bt_src_encoding.input_ids, bt_src_encoding.attention_mask
+        input_ids = input_ids.to(self.device)
+        attention_mask = attention_mask.to(self.device)
         begin_time = time.time()
         outputs = self.t5.generate(input_ids=input_ids, 
                                    attention_mask=attention_mask, 
@@ -272,31 +280,31 @@ class Reranker:
             raise NotImplementedError
         
 
-def get_conv_bert_input_no_response(query, context, tokenizer, max_query_length, max_response_length, max_seq_length):
-    input_ids = []
-    encoded_query = tokenizer.encode(query,
-                                    add_special_tokens=True, 
-                                    max_length=max_query_length, 
-                                    truncation=True)
-    input_ids.extend(encoded_query)
-    if len(context) > 1:
-        last_response = context[-1]
-        encoded_response = tokenizer.encode(last_response, 
-                                            add_special_tokens=True, 
-                                            max_length=max_response_length, 
-                                            truncation=True)[1:] # remove [CLS]
-        input_ids.extend(encoded_response)
+# def get_conv_bert_input_no_response(query, context, tokenizer, max_query_length, max_response_length, max_seq_length):
+#     input_ids = []
+#     encoded_query = tokenizer.encode(query,
+#                                     add_special_tokens=True, 
+#                                     max_length=max_query_length, 
+#                                     truncation=True)
+#     input_ids.extend(encoded_query)
+#     if len(context) > 1:
+#         last_response = context[-1]
+#         encoded_response = tokenizer.encode(last_response, 
+#                                             add_special_tokens=True, 
+#                                             max_length=max_response_length, 
+#                                             truncation=True)[1:] # remove [CLS]
+#         input_ids.extend(encoded_response)
     
-    for i in range(len(context) - 2, -1, -2):
-        encoded_history = tokenizer.encode(context[i],
-                                            add_special_tokens=True, 
-                                            max_length=max_query_length, 
-                                            truncation=True)[1:] # remove [CLS]
-        input_ids.extend(encoded_history)
-        if len(input_ids) > max_seq_length:
-            input_ids = input_ids[:max_seq_length - 1] + encoded_history[-1]    # ensure [SEP] ended
+#     for i in range(len(context) - 2, -1, -2):
+#         encoded_history = tokenizer.encode(context[i],
+#                                             add_special_tokens=True, 
+#                                             max_length=max_query_length, 
+#                                             truncation=True)[1:] # remove [CLS]
+#         input_ids.extend(encoded_history)
+#         if len(input_ids) > max_seq_length:
+#             input_ids = input_ids[:max_seq_length - 1] + encoded_history[-1]    # ensure [SEP] ended
     
-    return input_ids
+#     return input_ids
 
 def get_conv_bert_input_no_response(query, context, tokenizer, max_query_length, max_response_length, max_seq_length):
     input_ids = []
@@ -315,4 +323,15 @@ def get_conv_bert_input_no_response(query, context, tokenizer, max_query_length,
             input_ids = input_ids[:max_seq_length - 1] + encoded_history[-1]    # ensure [SEP] ended
             break
     
+    return input_ids
+
+
+
+def get_t5qr_input(query, context, tokenizer, max_seq_length):
+    src_text = "|||".join(context + [query])
+    src_text = " ".join([tok.text for tok in nlp(src_text)])
+    input_ids = tokenizer.encode(src_text,
+                     add_special_tokens=True, 
+                     max_length=max_seq_length, 
+                     truncation=True)
     return input_ids

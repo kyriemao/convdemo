@@ -7,6 +7,7 @@ from flask_login import LoginManager, login_user
 from flask_login import UserMixin
 from werkzeug.security import generate_password_hash, check_password_hash
 
+import json
 import torch
 import time
 import argparse
@@ -21,13 +22,6 @@ context = []
 
 @app.route("/", methods=['GET', 'POST'])
 def home():
-	# if request.method == 'POST':
-	# 	if request.form.get('action1') == 'VALUE1':
-	# 		global context
-	# 		context = []
-	# 		print("context: ", context)
-	# 		return render_template("home.html", val1=time.time())
-	# else:
 	global context
 	context = []
 	print("context: ", context)
@@ -47,6 +41,7 @@ def get_bot_response():
 		response_obj = search_bot.search(user_query, context)
 		# showing_response = respone
 	context.append(user_query)
+	# context.append(json.loads(response_obj)['rewrite'])
 	print("current context: ", context)
 	return response_obj
 
